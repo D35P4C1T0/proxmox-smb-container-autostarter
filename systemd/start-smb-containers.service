@@ -1,0 +1,14 @@
+[Unit]
+Description=Start SMB Containers after TrueNAS
+After=network.target pve-storage.target pve-guests.target
+Requires=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/start-smb-containers.sh
+TimeoutStartSec=400
+Restart=no
+LogRateLimitIntervalSec=0
+
+[Install]
+WantedBy=multi-user.target
