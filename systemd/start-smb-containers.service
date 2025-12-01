@@ -1,14 +1,18 @@
 [Unit]
 Description=Start SMB Containers after TrueNAS
-After=network.target pve-storage.target pve-guests.target
+Documentation=https://github.com/yourusername/proxmox-smb-autostart
+After=network.target network-online.target pve-storage.target pve-guests.target
 Requires=network-online.target
+Wants=pve-storage.target pve-guests.target
 
 [Service]
-Type=simple
+Type=oneshot
 ExecStart=/usr/local/bin/start-smb-containers.sh
 TimeoutStartSec=400
-Restart=no
-LogRateLimitIntervalSec=0
+RemainAfterExit=yes
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=smb-autostart
 
 [Install]
 WantedBy=multi-user.target
