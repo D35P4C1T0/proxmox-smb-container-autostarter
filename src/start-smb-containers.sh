@@ -147,16 +147,35 @@ wait_for_smb_shares() {
     log_info "Waiting for SMB share '${SMB_SHARE_NAME}' on ${TRUENAS_IP}..."
     
     while :; do
-        if smbclient -L "$TRUENAS_IP" \
+        # Use // prefix for IP address and remove --machine-pass flag
+        # Capture both stdout and stderr to check for errors
+        local smb_output
+        local smb_exit_code
+        
+        smb_output=$(smbclient -L "//${TRUENAS_IP}" \
             --authentication-file="$CREDENTIALS_FILE" \
-            --machine-pass 2>/dev/null | grep -q "$SMB_SHARE_NAME"; then
+            2>&1)
+        smb_exit_code=$?
+        
+        # Check if the share name appears in the output
+        if echo "$smb_output" | grep -q "$SMB_SHARE_NAME"; then
             log_info "SMB share '${SMB_SHARE_NAME}' is available"
             return 0
+        fi
+        
+        # Log error details if smbclient failed (but not on every iteration)
+        if (( smb_exit_code != 0 )) && (( waited % 30 == 0 )); then
+            log_warn "smbclient returned exit code ${smb_exit_code}"
+            log_warn "Last error output: $(echo "$smb_output" | tail -3)"
         fi
         
         if (( waited >= SMB_MAX_WAIT )); then
             log_error "Timeout reached waiting for SMB shares (${waited}s)"
             log_error "Verify SMB share name and network connectivity"
+            log_error "Last smbclient output:"
+            echo "$smb_output" | while IFS= read -r line; do
+                log_error "  $line"
+            done
             return 1
         fi
         
