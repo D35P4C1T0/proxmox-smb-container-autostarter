@@ -11,10 +11,19 @@ CREDENTIALS_FILE="${CREDENTIALS_FILE:-/root/.smbcredentials}"
 CONTAINER_CONFIG_DIR="${CONTAINER_CONFIG_DIR:-/etc/pve/lxc}"
 VM_MAX_WAIT="${VM_MAX_WAIT:-300}"              # 5 minutes for VM
 SMB_MAX_WAIT="${SMB_MAX_WAIT:-300}"            # 5 minutes for SMB
+NFS_MAX_WAIT="${NFS_MAX_WAIT:-300}"           # 5 minutes for NFS
 NETWORK_MAX_WAIT="${NETWORK_MAX_WAIT:-60}"     # 1 minute for network
 SLEEP_INTERVAL="${SLEEP_INTERVAL:-5}"
 NETWORK_CHECK_TARGET="${NETWORK_CHECK_TARGET:-8.8.8.8}"
 LOG_FILE="${LOG_FILE:-/var/log/smb-autostart.log}"
+
+# NFS Configuration (optional - set to empty to disable)
+NFS_SERVER_IP="${NFS_SERVER_IP:-}"
+NFS_SHARE_PATH="${NFS_SHARE_PATH:-}"
+
+# Feature flags (set to "true" to enable, empty or "false" to disable)
+ENABLE_SMB="${ENABLE_SMB:-true}"
+ENABLE_NFS="${ENABLE_NFS:-false}"
 
 # Load configuration from file if it exists
 CONFIG_FILE="${CONFIG_FILE:-/etc/smb-autostart.conf}"
@@ -48,8 +57,22 @@ log_warn() {
 # Check for required utilities
 verify_dependencies() {
     local missing_deps=()
+    local required_cmds=("pct" "qm")
     
-    for cmd in smbclient pct qm; do
+    # Check SMB dependencies if enabled
+    if [[ "${ENABLE_SMB}" == "true" ]]; then
+        required_cmds+=("smbclient")
+    fi
+    
+    # Check NFS dependencies if enabled
+    if [[ "${ENABLE_NFS}" == "true" ]]; then
+        # Check for showmount (part of nfs-common) or rpcinfo (part of rpcbind)
+        if ! command -v showmount &> /dev/null && ! command -v rpcinfo &> /dev/null; then
+            missing_deps+=("showmount or rpcinfo")
+        fi
+    fi
+    
+    for cmd in "${required_cmds[@]}"; do
         if ! command -v "$cmd" &> /dev/null; then
             missing_deps+=("$cmd")
         fi
@@ -57,7 +80,12 @@ verify_dependencies() {
     
     if [[ ${#missing_deps[@]} -gt 0 ]]; then
         log_error "Missing required utilities: ${missing_deps[*]}"
-        log_error "Install with: apt install smbclient"
+        if [[ "${ENABLE_SMB}" == "true" ]]; then
+            log_error "Install SMB support with: apt install smbclient"
+        fi
+        if [[ "${ENABLE_NFS}" == "true" ]]; then
+            log_error "Install NFS support with: apt install nfs-common"
+        fi
         log_error "pct and qm should be available in Proxmox VE environment"
         exit 1
     fi
@@ -72,8 +100,12 @@ verify_dependencies() {
     log_info "All dependencies verified"
 }
 
-# Validate credentials file
+# Validate credentials file (only if SMB is enabled)
 check_credentials() {
+    if [[ "${ENABLE_SMB}" != "true" ]]; then
+        return 0
+    fi
+    
     if [[ ! -f "$CREDENTIALS_FILE" ]]; then
         log_error "Credentials file not found: $CREDENTIALS_FILE"
         log_error "Create it from: docs/credentials.example"
@@ -142,6 +174,11 @@ wait_for_truenas() {
 
 # Wait for SMB shares to become available
 wait_for_smb_shares() {
+    if [[ "${ENABLE_SMB}" != "true" ]]; then
+        log_info "SMB checking is disabled, skipping"
+        return 0
+    fi
+    
     local waited=0
     
     log_info "Waiting for SMB share '${SMB_SHARE_NAME}' on ${TRUENAS_IP}..."
@@ -181,6 +218,78 @@ wait_for_smb_shares() {
         
         if (( waited % 30 == 0 )); then
             log_info "Still waiting for SMB shares... (${waited}/${SMB_MAX_WAIT}s)"
+        fi
+        
+        (( waited += SLEEP_INTERVAL )) || true
+        sleep "$SLEEP_INTERVAL"
+    done
+}
+
+# Wait for NFS shares to become available
+wait_for_nfs_shares() {
+    if [[ "${ENABLE_NFS}" != "true" ]]; then
+        log_info "NFS checking is disabled, skipping"
+        return 0
+    fi
+    
+    if [[ -z "${NFS_SERVER_IP}" ]] || [[ -z "${NFS_SHARE_PATH}" ]]; then
+        log_error "NFS is enabled but NFS_SERVER_IP or NFS_SHARE_PATH is not configured"
+        return 1
+    fi
+    
+    local waited=0
+    
+    log_info "Waiting for NFS share '${NFS_SHARE_PATH}' on ${NFS_SERVER_IP}..."
+    
+    while :; do
+        local nfs_output
+        local nfs_exit_code=0
+        
+        # Try showmount first (preferred), fall back to rpcinfo
+        if command -v showmount &> /dev/null; then
+            nfs_output=$(showmount -e "${NFS_SERVER_IP}" 2>&1) || nfs_exit_code=$?
+            
+            # Check if the share path appears in the output
+            if (( nfs_exit_code == 0 )) && echo "$nfs_output" | grep -q "${NFS_SHARE_PATH}"; then
+                log_info "NFS share '${NFS_SHARE_PATH}' is available"
+                return 0
+            fi
+        elif command -v rpcinfo &> /dev/null; then
+            # Use rpcinfo to check if NFS service is available
+            nfs_output=$(rpcinfo -p "${NFS_SERVER_IP}" 2>&1) || nfs_exit_code=$?
+            
+            # Check if NFS service (portmapper, nfs, mountd) is available
+            if (( nfs_exit_code == 0 )) && echo "$nfs_output" | grep -qE "(nfs|mountd|portmapper)"; then
+                # Try to mount test (requires root and may fail, but indicates NFS is up)
+                # We'll just check if the service is responding
+                log_info "NFS service is available on ${NFS_SERVER_IP}"
+                # Note: We can't verify the specific share path without mounting, so we assume it's available
+                # if NFS service is responding
+                return 0
+            fi
+        else
+            log_error "Neither showmount nor rpcinfo is available"
+            return 1
+        fi
+        
+        # Log error details if check failed (but not on every iteration)
+        if (( nfs_exit_code != 0 )) && (( waited % 30 == 0 )); then
+            log_warn "NFS check returned exit code ${nfs_exit_code}"
+            log_warn "Last error output: $(echo "$nfs_output" | tail -3)"
+        fi
+        
+        if (( waited >= NFS_MAX_WAIT )); then
+            log_error "Timeout reached waiting for NFS shares (${waited}s)"
+            log_error "Verify NFS share path and network connectivity"
+            log_error "Last NFS check output:"
+            echo "$nfs_output" | while IFS= read -r line; do
+                log_error "  $line"
+            done
+            return 1
+        fi
+        
+        if (( waited % 30 == 0 )); then
+            log_info "Still waiting for NFS shares... (${waited}/${NFS_MAX_WAIT}s)"
         fi
         
         (( waited += SLEEP_INTERVAL )) || true
@@ -267,7 +376,16 @@ start_container() {
 
 # Main execution
 main() {
-    log_info "=== Starting SMB container autostart sequence ==="
+    local enabled_protocols=()
+    [[ "${ENABLE_SMB}" == "true" ]] && enabled_protocols+=("SMB")
+    [[ "${ENABLE_NFS}" == "true" ]] && enabled_protocols+=("NFS")
+    
+    if [[ ${#enabled_protocols[@]} -eq 0 ]]; then
+        log_error "No protocols enabled. Set ENABLE_SMB=true or ENABLE_NFS=true"
+        exit 1
+    fi
+    
+    log_info "=== Starting container autostart sequence (${enabled_protocols[*]}) ==="
     
     # Preliminary checks
     verify_dependencies
@@ -280,17 +398,31 @@ main() {
     fi
     
     # Wait for SMB shares to become available
-    if ! wait_for_smb_shares; then
-        log_error "SMB shares did not become available"
-        exit 1
+    if [[ "${ENABLE_SMB}" == "true" ]]; then
+        if ! wait_for_smb_shares; then
+            log_error "SMB shares did not become available"
+            exit 1
+        fi
     fi
     
-    # Find and start SMB containers
+    # Wait for NFS shares to become available
+    if [[ "${ENABLE_NFS}" == "true" ]]; then
+        if ! wait_for_nfs_shares; then
+            log_error "NFS shares did not become available"
+            exit 1
+        fi
+    fi
+    
+    # Find and start containers with smb or nfs tags
     local containers_found=0
     local containers_started=0
     local containers_failed=0
     
-    log_info "Scanning for containers with 'smb' tag..."
+    local tags_to_find=()
+    [[ "${ENABLE_SMB}" == "true" ]] && tags_to_find+=("smb")
+    [[ "${ENABLE_NFS}" == "true" ]] && tags_to_find+=("nfs")
+    
+    log_info "Scanning for containers with tags: ${tags_to_find[*]}"
     
     for config in "${CONTAINER_CONFIG_DIR}"/*.conf; do
         # Handle case where no .conf files exist
@@ -302,9 +434,18 @@ main() {
         # Skip if vmid is not numeric (invalid config file)
         [[ "$vmid" =~ ^[0-9]+$ ]] || continue
         
-        if grep -q -E '^tags:\s.*\bsmb\b' "$config"; then
+        # Check if container has any of the enabled tags
+        local found_tag=""
+        for tag in "${tags_to_find[@]}"; do
+            if grep -q -E "^tags:\\s.*\\b${tag}\\b" "$config"; then
+                found_tag="$tag"
+                break
+            fi
+        done
+        
+        if [[ -n "$found_tag" ]]; then
             (( containers_found++ )) || true
-            log_info "Found SMB container: ${vmid}"
+            log_info "Found ${found_tag^^} container: ${vmid}"
             
             if start_container "$vmid"; then
                 (( containers_started++ )) || true

@@ -1,13 +1,21 @@
-# SMB Container Autostart Configuration
+# Container Autostart Configuration (SMB and NFS)
 # Copy this file to /etc/smb-autostart.conf and customize
 
 # TrueNAS VM Configuration
 TRUENAS_VMID=110
 TRUENAS_IP="192.168.1.100"
 
+# Protocol Enable/Disable Flags
+ENABLE_SMB="true"           # Set to "true" to enable SMB checking, "false" to disable
+ENABLE_NFS="false"          # Set to "true" to enable NFS checking, "false" to disable
+
 # SMB Share Configuration
 SMB_SHARE_NAME="media"
 CREDENTIALS_FILE="/root/.smbcredentials"
+
+# NFS Share Configuration
+NFS_SERVER_IP=""            # NFS server IP address (e.g., "192.168.1.100")
+NFS_SHARE_PATH=""           # NFS share path (e.g., "/mnt/pool/media")
 
 # Container Configuration
 CONTAINER_CONFIG_DIR="/etc/pve/lxc"
@@ -15,6 +23,7 @@ CONTAINER_CONFIG_DIR="/etc/pve/lxc"
 # Timeout Configuration (in seconds)
 VM_MAX_WAIT=300              # Maximum wait time for TrueNAS VM to start
 SMB_MAX_WAIT=300            # Maximum wait time for SMB shares to become available
+NFS_MAX_WAIT=300            # Maximum wait time for NFS shares to become available
 NETWORK_MAX_WAIT=60         # Maximum wait time for container network readiness
 SLEEP_INTERVAL=5            # Check interval in seconds
 

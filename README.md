@@ -1,24 +1,27 @@
-# Proxmox SMB Container Autostarter
+# Proxmox SMB/NFS Container Autostarter
 
-Automatically starts Proxmox containers tagged with "smb" after TrueNAS VM and SMB shares are available.
+Automatically starts Proxmox containers tagged with "smb" or "nfs" after TrueNAS VM and network shares (SMB/NFS) are available.
 
 ## Features
 - ✅ Waits for TrueNAS VM to fully initialize
 - ✅ Verifies SMB share availability using smbclient
-- 🔒 Secure credential handling via authentication file
+- ✅ Verifies NFS share availability using showmount/rpcinfo
+- 🔒 Secure credential handling via authentication file (SMB)
 - ⏳ Configurable timeouts and retry intervals
 - 📊 Detailed logging with timestamps to `/var/log/smb-autostart.log`
 - 🐋 Container network readiness checks
 - ⚙️ Configuration file support (`/etc/smb-autostart.conf`)
 - 🔍 Enhanced error handling and validation
 - 📝 Log rotation support
+- 🔀 Support for both SMB and NFS protocols (configurable)
 
 ## Installation
 
 ### Prerequisites
 - Proxmox VE 7+
-- TrueNAS VM with SMB shares
-- `smbclient` installed (`apt install smbclient`)
+- TrueNAS VM with SMB and/or NFS shares
+- For SMB: `smbclient` installed (`apt install smbclient`)
+- For NFS: `nfs-common` installed (`apt install nfs-common`)
 
 ### Quick Setup
 
@@ -69,13 +72,22 @@ Edit `/etc/smb-autostart.conf`:
 TRUENAS_VMID=110
 TRUENAS_IP="192.168.1.100"
 
+# Protocol Enable/Disable Flags
+ENABLE_SMB="true"           # Set to "true" to enable SMB checking
+ENABLE_NFS="false"          # Set to "true" to enable NFS checking
+
 # SMB Share Configuration
 SMB_SHARE_NAME="media"
 CREDENTIALS_FILE="/root/.smbcredentials"
 
+# NFS Share Configuration
+NFS_SERVER_IP="192.168.1.100"    # NFS server IP address
+NFS_SHARE_PATH="/mnt/pool/media"  # NFS share path
+
 # Timeout Configuration (in seconds)
 VM_MAX_WAIT=300              # Maximum wait time for TrueNAS VM
 SMB_MAX_WAIT=300            # Maximum wait time for SMB shares
+NFS_MAX_WAIT=300            # Maximum wait time for NFS shares
 NETWORK_MAX_WAIT=60         # Maximum wait time for container network
 SLEEP_INTERVAL=5            # Check interval in seconds
 
@@ -85,14 +97,20 @@ NETWORK_CHECK_TARGET="8.8.8.8"  # Target for network connectivity check
 
 #### Container Tagging
 
-To tag a container with "smb", edit the container config file:
+To tag a container with "smb" or "nfs", edit the container config file:
 
 ```bash
 # Edit container config (replace 100 with your container ID)
 nano /etc/pve/lxc/100.conf
 
-# Add or modify the tags line:
+# For SMB containers, add or modify the tags line:
 tags: smb,media
+
+# For NFS containers, add or modify the tags line:
+tags: nfs,media
+
+# Containers can have multiple tags, but only "smb" or "nfs" trigger autostart
+tags: smb,nfs,media
 ```
 
 ### Verification
@@ -101,8 +119,13 @@ tags: smb,media
 # Check service status
 systemctl status start-smb-containers.service
 
-# Test SMB connectivity
+# Test SMB connectivity (if SMB is enabled)
 smbclient -L //192.168.1.100 --authentication-file=/root/.smbcredentials
+
+# Test NFS connectivity (if NFS is enabled)
+showmount -e 192.168.1.100
+# or
+rpcinfo -p 192.168.1.100
 
 # View logs
 journalctl -u start-smb-containers.service -f
@@ -120,21 +143,31 @@ The service runs with:
 ### Troubleshooting
 
 #### Service fails to start
-- Check that all dependencies are installed: `smbclient`, `pct`, `qm`
+- Check that all dependencies are installed:
+  - For SMB: `smbclient` (`apt install smbclient`)
+  - For NFS: `nfs-common` (`apt install nfs-common`)
+  - Always required: `pct`, `qm` (should be available in Proxmox VE)
 - Verify Proxmox environment: `/etc/pve/lxc` directory exists
-- Check credentials file permissions: `ls -l /root/.smbcredentials`
+- Check credentials file permissions (SMB only): `ls -l /root/.smbcredentials`
 - Review logs: `journalctl -u start-smb-containers.service -n 50`
 
 #### Containers not starting
-- Verify containers are tagged correctly: `grep -r "tags.*smb" /etc/pve/lxc/`
+- Verify containers are tagged correctly:
+  - For SMB: `grep -r "tags.*smb" /etc/pve/lxc/`
+  - For NFS: `grep -r "tags.*nfs" /etc/pve/lxc/`
 - Check container status: `pct status <vmid>`
 - Verify TrueNAS VM is running: `qm status 110`
-- Test SMB connectivity manually: `smbclient -L //<TRUENAS_IP> --authentication-file=/root/.smbcredentials`
+- Test SMB connectivity manually (if SMB enabled): `smbclient -L //<TRUENAS_IP> --authentication-file=/root/.smbcredentials`
+- Test NFS connectivity manually (if NFS enabled): `showmount -e <NFS_SERVER_IP>` or `rpcinfo -p <NFS_SERVER_IP>`
 
 #### Timeout issues
-- Increase timeout values in `/etc/smb-autostart.conf`
-- Check network connectivity between Proxmox and TrueNAS
+- Increase timeout values in `/etc/smb-autostart.conf`:
+  - `VM_MAX_WAIT` - for TrueNAS VM startup
+  - `SMB_MAX_WAIT` - for SMB share availability
+  - `NFS_MAX_WAIT` - for NFS share availability
+- Check network connectivity between Proxmox and TrueNAS/NFS server
 - Verify TrueNAS VM startup time (may need longer `VM_MAX_WAIT`)
+- For NFS: Ensure NFS service is running on the server and firewall allows NFS traffic
 
 #### Log file issues
 - Check log file permissions: `ls -l /var/log/smb-autostart.log`
