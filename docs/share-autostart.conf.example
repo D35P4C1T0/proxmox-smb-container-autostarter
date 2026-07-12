@@ -1,0 +1,21 @@
+# smb or nfs
+PROTOCOL="smb"
+SHARE_HOST="192.168.1.100"
+# SMB share name, or NFS export path such as /mnt/tank/media
+SHARE_NAME="media"
+
+# Semicolon-separated Proxmox tags are supported. Matching is exact.
+TAG="smb"
+
+# Optional provider guest. Leave empty for an external NAS.
+SOURCE_VMID="110"
+SOURCE_TYPE="qemu"
+
+# SMB only. Set empty for guest access. File format: username=... and password=...
+CREDENTIALS_FILE="/root/.smbcredentials"
+
+MAX_WAIT=600
+SLEEP_INTERVAL=5
+START_TIMEOUT=60
+# Journal is used by default. Optional second log destination:
+LOG_FILE=""

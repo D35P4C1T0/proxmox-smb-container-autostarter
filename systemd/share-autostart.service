@@ -1,0 +1,19 @@
+[Unit]
+Description=Start tagged LXC containers when network share becomes available
+Documentation=https://github.com/D35P4C1T0/proxmox-smb-container-autostarter
+Wants=network-online.target
+After=network-online.target pve-cluster.service pve-guests.service
+ConditionPathExists=/etc/pve/lxc
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/proxmox-share-autostart
+Restart=on-failure
+RestartSec=30s
+TimeoutStartSec=infinity
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=share-autostart
+
+[Install]
+WantedBy=multi-user.target
